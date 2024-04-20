@@ -2,7 +2,7 @@
 #include <PubSubClient.h>
 #include <ESP32Servo.h>
 #include <ArduinoJson.h>
-#include "wifi_config.h"
+#include "config.h"
 
 // Mqtt
 WiFiClient espClient;
