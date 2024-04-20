@@ -1,5 +1,5 @@
 #include "WiFi.h"
-#include "config.h"
+#include "wifi_config.h"
 
 void setup() {
   Serial.begin(9600);
