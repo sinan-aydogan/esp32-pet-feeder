@@ -1,12 +1,21 @@
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
 #include <PubSubClient.h>
 #include <ESP32Servo.h>
 #include <ArduinoJson.h>
 #include "config.h"
 
+// NTP Client Settings
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", GTMOffset*60*60, 36000);
+
 // Mqtt
 WiFiClient espClient;
 PubSubClient client(espClient);
+const char* device_id = "PET_FEEDER_1923";
+const char* feed_topic = "pet_feeder/feed";
+const char* heart_beat_topic = "pet_feeder/heart_beat";
 
 // Servo
 Servo myservo; 
@@ -14,6 +23,10 @@ int servoPin = 18;
 
 // Heart-beat
 unsigned long previousMillis = 0;
+
+// Feeding
+int last_feeding = 0;
+int feeding_counter = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -25,34 +38,36 @@ void setup() {
 
   // Network
   connect_wifi();
+
+  // NTP Client Start
+  timeClient.begin();
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
+  // Reconnect wifi
+  wifi_reconnect();
 
-  if (WiFi.isConnected()) {
-    if (!client.connected()) {
-      mqtt_reconnect();
-    }
-  }else{
-    connect_wifi();
-  }
+  // NTP
+  timeClient.update();
 
+  // Mqtt client
   client.loop();
 
-  if (currentMillis - previousMillis >= 10000) {
-    previousMillis = currentMillis;  // Güncel zamanı kaydet
-    client.publish("pet_feeder/beat", "live");  // MQTT mesajını gönder
-  }
+  // Publishing heart-beat
+  heart_beat_timer();
+
+  //
+  check_feeding();
 }
 
 
 void connect_wifi() {
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!WiFi.isConnected()) {
     Serial.println("Connecting to WiFi...");
+    strcpy(feeding_type, "periodical");
     
     WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
+    while (!WiFi.isConnected()) {
       delay(500);
       Serial.print(".");
     }
@@ -64,14 +79,27 @@ void connect_wifi() {
   setup_mqtt();
 }
 
+void wifi_reconnect(){
+  unsigned long currentMillis = millis();
+  if (!WiFi.isConnected() && (currentMillis - previousMillis >=3000)) {
+    Serial.print(millis());
+    Serial.println("Reconnecting to WiFi...");
+    WiFi.disconnect();
+    WiFi.reconnect();
+    previousMillis = currentMillis;
+}
+}
+
 // Mqtt methods
 void setup_mqtt(){
   client.setServer(mqttServer, 1883);
+  mqtt_reconnect();
   client.setCallback(mqtt_callback);
 }
 
 void mqtt_reconnect() {
   while (!client.connected()) {
+    strcpy(feeding_type, "periodical");
     Serial.println("Attempting MQTT connection...");
 
     if (client.connect("PET_FEEDER")) {
@@ -96,22 +124,18 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   JsonDocument doc;
   deserializeJson(doc, payload, length);
 
-  // Heart beat
-  if(strcmp(topic, "pet_feeder/beat") == 0){
-    send_beat();
-  }
-
   // Feed
-  if(strcmp(topic, "pet_feeder/feed") == 0){
+  if(strcmp(topic, feed_topic) == 0){
     handle_feed(doc);
   }
 }
 
 // Servo methods
-void rotateServo(int turn, int frequence = 1000) {
+void rotateServo(int turn) {
   for(int i = 0; i < turn; i++){
+    feeding_counter++;
     Serial.println(turn);
-    myservo.writeMicroseconds(frequence);
+    myservo.writeMicroseconds(1000);
     delay(300);
     myservo.writeMicroseconds(1500);
     delay(1000);
@@ -120,17 +144,51 @@ void rotateServo(int turn, int frequence = 1000) {
 
 // Feed method
 void handle_feed(JsonDocument &doc) {
-  String time = doc["time"];
-  int amount = doc["amount"];
-  int frequence = doc["frequence"];
+  String time = doc["time"] ? doc["time"] :  timeClient.getFormattedTime();
+  int amount = doc["amount"] ? doc["amount"] : default_mqtt_feeding_amount;
 
-  rotateServo(amount, frequence);
+  rotateServo(amount);
   String response = "Feeding completed, " + String(amount) + " meal/s";
   Serial.println(response.c_str());
   client.publish("pet_feeder/feed/reponse", response.c_str());
 }
 
-// Beat method
-void send_beat(){
-  client.publish("pet_feeder/beat", "live");
+// Heart-beat method
+void heart_beat_timer() {
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - previousMillis >= 10000) {
+    previousMillis = currentMillis;
+      publish_heart_beat();
+  }
+}
+
+
+void publish_heart_beat() {
+  Serial.print("Pet feeder is live: ");
+  Serial.println(timeClient.getFormattedTime());
+
+  // Generate heart beat message
+  JsonDocument message;
+  message["command"] = "heart_beat";
+  message["time"] = timeClient.getFormattedTime();
+  char buffer[256];
+  serializeJson(message, buffer);
+
+  // Publish message to heart_beat topic
+  client.publish(heart_beat_topic, buffer);
+}
+
+void check_feeding(){
+  unsigned long currentMillis = millis();
+  if((strcmp(feeding_type, "periodical") == 0) || !client.connected()){
+    int period = feeding_period*60*60*1000;
+      if(currentMillis - last_feeding >= period){
+        Serial.println(currentMillis);
+        Serial.println(last_feeding);
+        Serial.println(period);
+        last_feeding = currentMillis;
+        rotateServo(default_periodical_feeding_amount);
+      }
+  }
 }
