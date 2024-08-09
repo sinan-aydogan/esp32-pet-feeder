@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, nextTick } from 'vue';
+import {ref, reactive, nextTick} from 'vue';
 import DialogModal from './DialogModal.vue';
 import InputError from './InputError.vue';
 import PrimaryButton from './PrimaryButton.vue';
@@ -73,7 +73,7 @@ const closeModal = () => {
 <template>
     <span>
         <span @click="startConfirmingPassword">
-            <slot />
+            <slot/>
         </span>
 
         <DialogModal :show="confirmingPassword" @close="closeModal">
@@ -95,7 +95,7 @@ const closeModal = () => {
                         @keyup.enter="confirmPassword"
                     />
 
-                    <InputError :message="form.error" class="mt-2" />
+                    <InputError :message="form.error" class="mt-2"/>
                 </div>
             </template>
 
